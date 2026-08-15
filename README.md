@@ -5,5 +5,6 @@
 <p> This is ine of our first projects as Xonra, and you csn regulsr help to make the game better by forking from this to form your own repository and sending a push request after adding 
     your own changes and we will then approve it if the code is good and does not cause smt game-breaking bugs. </p>
 <p> If you want more updates, you can join our discord server, Xonra.xyz, over here </p>
+<a href="https://discord.gg/8nBSqeYW6C"> Our link </a>
 </body>
 </html>
