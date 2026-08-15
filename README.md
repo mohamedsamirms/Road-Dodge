@@ -1,2 +1,4 @@
-# Road-Dodge
-is a game where you go thru an endless road and dodge the objects in it
+<html>
+Road-Dodge
+is a regular, fun little game where you have to go through an endlessly long road and dodge any obstacles and objects on it.
+</html>
