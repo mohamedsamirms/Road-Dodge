@@ -1,0 +1,16 @@
+fc8a56933c4b1c8d796fdb8f7a9f9475
+::res://::1786804471
+export_presets.cfg::TextFile::-1::1786462918::0::1::::<><>::
+icon.svg::CompressedTexture2D::6506001045313060707::1785255146::1785254345::1::::<><>::
+Main.gd::GDScript::-1::1785255146::0::1::::<>Node2D<>::
+Main.tscn::PackedScene::1919923723140292699::1786464371::0::1::::<><>::res://Main.gd
+::res://export/::1786464348
+RoadDodge.apple-touch-icon.png::CompressedTexture2D::8044021764642921996::1786462888::1786464348::1::::<><>::
+RoadDodge.icon.png::CompressedTexture2D::2283482352383744337::1786462888::1786464348::1::::<><>::
+RoadDodge.png::CompressedTexture2D::6771406472442462582::1786462888::1786464348::1::::<><>::
+::res://sfx/::1785255145
+coin.wav::AudioStreamWAV::5248491073579810362::1785255145::1785254237::1::::<><>::
+crash.wav::AudioStreamWAV::6881719473383922218::1785255145::1785254237::1::::<><>::
+shield.wav::AudioStreamWAV::543650824048103488::1785255145::1785254237::1::::<><>::
+switch.wav::AudioStreamWAV::7213725615703280684::1785255145::1785254237::1::::<><>::
+upgrade.wav::AudioStreamWAV::1224742496574806774::1785255145::1785254237::1::::<><>::

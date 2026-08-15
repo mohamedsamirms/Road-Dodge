@@ -1,0 +1,12 @@
+78098b89c88a74ebe8c20117b8754620
+::res://::1785254344
+export_presets.cfg::TextFile::-1::1785254277::0::1::::<><><>0<>0<><>::
+icon.svg::CompressedTexture2D::6506001045313060707::1785254277::1785254345::1::::<><><>0<>0<>decf90c8fbdb55dd7b4bb69f0d29199c<>res://.godot/imported/icon.svg-218a8f2b3041327d8a5756f3a245f83b.ctex::
+Main.gd::GDScript::5464040598592811738::1785254277::0::1::::<>Node2D<><>0<>0<><>::
+Main.tscn::PackedScene::-1::1785254277::0::1::::<><><>0<>0<><>::res://Main.gd
+::res://sfx/::1785254281
+coin.wav::AudioStreamWAV::5248491073579810362::1785254281::1785254237::1::::<><><>0<>0<>99d2cf9f96a8c09638c2bf31cade3afe<>res://.godot/imported/coin.wav-b287e1be76f15650fa953c52a76a4850.sample::
+crash.wav::AudioStreamWAV::6881719473383922218::1785254281::1785254237::1::::<><><>0<>0<>0cbb2619eec2b83914764900b5baeeba<>res://.godot/imported/crash.wav-fad3938d2fcc223f89e225954b0d0e03.sample::
+shield.wav::AudioStreamWAV::543650824048103488::1785254281::1785254237::1::::<><><>0<>0<>50e271710752fec529e17298ccd2fef1<>res://.godot/imported/shield.wav-0b0ff0e152f431cd73d13e54683d80dc.sample::
+switch.wav::AudioStreamWAV::7213725615703280684::1785254281::1785254237::1::::<><><>0<>0<>c8dfc2587b9c3a5a29c228e7af04552a<>res://.godot/imported/switch.wav-a56a74f7be90a196707c5a22ef60f6d2.sample::
+upgrade.wav::AudioStreamWAV::1224742496574806774::1785254281::1785254237::1::::<><><>0<>0<>6642508b1c8f5d0daf6b0ca4ccd85962<>res://.godot/imported/upgrade.wav-8a12db165be13a305e1ba87219d72a26.sample::
