@@ -1,45 +1,41 @@
 extends Node2D
 
-# ---------- Screen / road geometry ----------
-const SCREEN_W := 400.0
-const SCREEN_H := 700.0
-const ROAD_LEFT := 100.0
-const ROAD_RIGHT := 300.0
+var SCREEN_W := 400.0
+var SCREEN_H := 700.0
+var ROAD_LEFT := 100.0
+var ROAD_RIGHT := 300.0
 const LANE_COUNT := 3
-const LANE_WIDTH := (ROAD_RIGHT - ROAD_LEFT) / LANE_COUNT
+var LANE_WIDTH := 66.6667
+var ui_scale := 1.0
+var tree_spacing := 140.0
+var effective_scroll_speed := 220.0
 
-# ---------- Player ----------
-const PLAYER_Y := 580.0
+var PLAYER_Y := 580.0
 const LANE_MOVE_SPEED := 12.0
 var player_lane := 1
 var player_x := 0.0
 
-# ---------- Run state ----------
 var score := 0.0
 var scroll_offset := 0.0
 const SCROLL_SPEED := 220.0
 var shield_active := false
 
-# ---------- Obstacles / collectibles ----------
-var entities := []      # Array of Dictionary {id, y, lane, type}
+var entities := []
 var next_id := 0
 var spawn_timer := 0.0
 var spawn_interval := 0.9
 
-# ---------- Decoration ----------
-var trees := []          # Array of Dictionary {y, side}
+var trees := []
 
-# ---------- Player texture ----------
 const ICON_PATH := "res://icon.svg"
 var player_texture: Texture2D = null
 
-# ---------- Persistent save data ----------
 const SAVE_PATH := "user://savegame.json"
 var high_score := 0
-var coins := 0                 # spendable currency, persists across runs
-var upg_shield := 0            # 0 or 1
-var upg_multiplier := 0        # 0..MULT_MAX
-var upg_headstart := 0         # 0..HEADSTART_MAX
+var coins := 0
+var upg_shield := 0
+var upg_multiplier := 0
+var upg_headstart := 0
 
 const MULT_STEP := 0.1
 const MULT_MAX := 5
@@ -48,6 +44,19 @@ const HEADSTART_MAX := 3
 const SHIELD_COST := 40
 const MULT_BASE_COST := 20
 const HEADSTART_BASE_COST := 15
+
+enum GameState { LOADING, MENU, SHOP, PLAYING, GAME_OVER }
+var state := GameState.LOADING
+var loading_timer := 0.0
+const LOADING_DURATION := 1.3
+
+var sfx_coin: AudioStreamPlayer
+var sfx_crash: AudioStreamPlayer
+var sfx_switch: AudioStreamPlayer
+var sfx_upgrade: AudioStreamPlayer
+var sfx_shield: AudioStreamPlayer
+
+const DISCORD_URL := "https://discord.gg/xVbqpgH2GX"
 
 func score_multiplier() -> float:
 	return 1.0 + upg_multiplier * MULT_STEP
@@ -61,37 +70,37 @@ func mult_cost() -> int:
 func headstart_cost() -> int:
 	return HEADSTART_BASE_COST * (upg_headstart + 1)
 
-# ---------- Game state machine ----------
-enum GameState { LOADING, MENU, SHOP, PLAYING, GAME_OVER }
-var state := GameState.LOADING
-var loading_timer := 0.0
-const LOADING_DURATION := 1.3
-
-# ---------- Audio ----------
-var sfx_coin: AudioStreamPlayer
-var sfx_crash: AudioStreamPlayer
-var sfx_switch: AudioStreamPlayer
-var sfx_upgrade: AudioStreamPlayer
-var sfx_shield: AudioStreamPlayer
-
 func _ready() -> void:
 	randomize()
-	player_x = lane_center(player_lane)
+	get_window().mode = Window.MODE_FULLSCREEN
+	get_window().size_changed.connect(_update_layout)
+	_update_layout()
+
+	trees.clear()
 	for i in range(6):
-		trees.append({"y": i * 140.0 - 100.0, "side": i % 2})
+		trees.append({"y": i * tree_spacing - 100.0, "side": i % 2})
+
 	load_game()
+
 	if ResourceLoader.exists(ICON_PATH):
 		player_texture = load(ICON_PATH)
+
 	sfx_coin = make_player("res://sfx/coin.wav")
 	sfx_crash = make_player("res://sfx/crash.wav")
 	sfx_switch = make_player("res://sfx/switch.wav")
 	sfx_upgrade = make_player("res://sfx/upgrade.wav")
 	sfx_shield = make_player("res://sfx/shield.wav")
 
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_SIZE_CHANGED:
+		_update_layout()
+
 func make_player(path: String) -> AudioStreamPlayer:
 	var p := AudioStreamPlayer.new()
+
 	if ResourceLoader.exists(path):
 		p.stream = load(path)
+
 	add_child(p)
 	return p
 
@@ -99,16 +108,45 @@ func play_sfx(p: AudioStreamPlayer) -> void:
 	if p and p.stream:
 		p.play()
 
-# ---------- Save / load ----------
+func _update_layout() -> void:
+	var vp := get_viewport_rect().size
+
+	if vp.x <= 0.0 or vp.y <= 0.0:
+		return
+
+	SCREEN_W = vp.x
+	SCREEN_H = vp.y
+	ui_scale = clamp(min(SCREEN_W, SCREEN_H) / 400.0, 0.7, 2.5)
+
+	var road_width: float = clamp(SCREEN_W * 0.5, 240.0, 560.0)
+	ROAD_LEFT = (SCREEN_W - road_width) / 2.0
+	ROAD_RIGHT = ROAD_LEFT + road_width
+	LANE_WIDTH = road_width / LANE_COUNT
+
+	PLAYER_Y = SCREEN_H * 0.83
+	tree_spacing = max(120.0, SCREEN_H * 0.2)
+	effective_scroll_speed = SCROLL_SPEED * (SCREEN_H / 700.0)
+
+	player_x = lane_center(player_lane)
+	queue_redraw()
+
+func content_width() -> float:
+	return min(SCREEN_W * 0.85, 480.0)
+
 func load_game() -> void:
 	if not FileAccess.file_exists(SAVE_PATH):
 		return
+
 	var f := FileAccess.open(SAVE_PATH, FileAccess.READ)
+
 	if not f:
 		return
+
 	var text := f.get_as_text()
 	f.close()
-	var parsed = JSON.parse_string(text)
+
+	var parsed: Variant = JSON.parse_string(text)
+
 	if typeof(parsed) == TYPE_DICTIONARY:
 		high_score = int(parsed.get("high_score", 0))
 		coins = int(parsed.get("coins", 0))
@@ -116,7 +154,6 @@ func load_game() -> void:
 		upg_multiplier = int(parsed.get("upg_multiplier", 0))
 		upg_headstart = int(parsed.get("upg_headstart", 0))
 	else:
-		# legacy save from an earlier version of this game (plain integer high score)
 		high_score = text.strip_edges().to_int()
 
 func save_game() -> void:
@@ -125,9 +162,11 @@ func save_game() -> void:
 		"coins": coins,
 		"upg_shield": upg_shield,
 		"upg_multiplier": upg_multiplier,
-		"upg_headstart": upg_headstart,
+		"upg_headstart": upg_headstart
 	}
+
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+
 	if f:
 		f.store_string(JSON.stringify(data))
 		f.close()
@@ -135,7 +174,6 @@ func save_game() -> void:
 func lane_center(lane: int) -> float:
 	return ROAD_LEFT + LANE_WIDTH * (lane + 0.5)
 
-# ---------- Upgrades ----------
 func buy_shield() -> void:
 	if upg_shield < 1 and coins >= shield_cost():
 		coins -= shield_cost()
@@ -157,10 +195,10 @@ func buy_headstart() -> void:
 		save_game()
 		play_sfx(sfx_upgrade)
 
-# ---------- Input ----------
 func _unhandled_input(event: InputEvent) -> void:
-	var key_pressed = (event is InputEventKey) and event.pressed
-	var tap_pos = null
+	var key_pressed: bool = event is InputEventKey and event.pressed
+	var tap_pos: Variant = null
+
 	if event is InputEventScreenTouch and event.pressed:
 		tap_pos = event.position
 	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
@@ -180,6 +218,7 @@ func _unhandled_input(event: InputEvent) -> void:
 					state = GameState.SHOP
 				elif menu_play_rect().has_point(tap_pos):
 					start_run()
+
 		GameState.SHOP:
 			if key_pressed:
 				if event.keycode == KEY_1:
@@ -201,6 +240,7 @@ func _unhandled_input(event: InputEvent) -> void:
 					buy_headstart()
 				elif shop_back_rect().has_point(tap_pos):
 					state = GameState.MENU
+
 		GameState.PLAYING:
 			if key_pressed:
 				if (event.keycode == KEY_LEFT or event.keycode == KEY_A) and player_lane > 0:
@@ -216,33 +256,70 @@ func _unhandled_input(event: InputEvent) -> void:
 				elif tap_pos.x >= SCREEN_W / 2.0 and player_lane < LANE_COUNT - 1:
 					player_lane += 1
 					play_sfx(sfx_switch)
+
 		GameState.GAME_OVER:
 			if tap_pos != null and discord_icon_rect().has_point(tap_pos):
 				open_discord()
 			elif key_pressed or tap_pos != null:
 				state = GameState.MENU
 
-# ---------- Discord link ----------
-const DISCORD_URL := "https://discord.gg/xVbqpgH2GX"
-
 func open_discord() -> void:
 	OS.shell_open(DISCORD_URL)
 
 func discord_icon_rect() -> Rect2:
-	return Rect2(SCREEN_W - 46, 12, 32, 32)
+	var s := 34.0 * ui_scale
+	return Rect2(
+		SCREEN_W - s - 14.0 * ui_scale,
+		14.0 * ui_scale,
+		s,
+		s
+	)
 
-# ---------- Shared UI hit-rects (used by both drawing and touch/click input) ----------
 func menu_play_rect() -> Rect2:
-	return Rect2(SCREEN_W / 2.0 - 90, SCREEN_H / 2.0 + 30, 180, 42)
+	var w := content_width() * 0.6
+	var h := SCREEN_H * 0.065
+
+	return Rect2(
+		SCREEN_W / 2.0 - w / 2.0,
+		SCREEN_H * 0.56,
+		w,
+		h
+	)
 
 func menu_shop_rect() -> Rect2:
-	return Rect2(SCREEN_W / 2.0 - 90, SCREEN_H / 2.0 + 82, 180, 42)
+	var w := content_width() * 0.6
+	var h := SCREEN_H * 0.065
+
+	return Rect2(
+		SCREEN_W / 2.0 - w / 2.0,
+		SCREEN_H * 0.645,
+		w,
+		h
+	)
 
 func shop_row_rect(index: int) -> Rect2:
-	return Rect2(16, 152 + index * 90, SCREEN_W - 32, 68)
+	var w := content_width()
+	var h := SCREEN_H * 0.105
+	var top := SCREEN_H * 0.27
+	var gap := SCREEN_H * 0.135
+
+	return Rect2(
+		SCREEN_W / 2.0 - w / 2.0,
+		top + index * gap,
+		w,
+		h
+	)
 
 func shop_back_rect() -> Rect2:
-	return Rect2(SCREEN_W / 2.0 - 70, SCREEN_H - 62, 140, 40)
+	var w := content_width() * 0.42
+	var h := SCREEN_H * 0.06
+
+	return Rect2(
+		SCREEN_W / 2.0 - w / 2.0,
+		SCREEN_H - h - SCREEN_H * 0.04,
+		w,
+		h
+	)
 
 func start_run() -> void:
 	score = 0.0
@@ -254,46 +331,58 @@ func start_run() -> void:
 	spawn_interval = 0.9 + upg_headstart * HEADSTART_STEP
 	state = GameState.PLAYING
 
-# ---------- Update ----------
 func _process(delta: float) -> void:
 	match state:
 		GameState.LOADING:
 			loading_timer += delta
+
 			if loading_timer >= LOADING_DURATION:
 				state = GameState.MENU
+
 		GameState.PLAYING:
 			_process_gameplay(delta)
-		_:
-			pass
+
 	queue_redraw()
 
 func _process_gameplay(delta: float) -> void:
 	score += delta * 10.0 * score_multiplier()
-	scroll_offset = fmod(scroll_offset + SCROLL_SPEED * delta, 40.0)
+	scroll_offset = fmod(scroll_offset + effective_scroll_speed * delta, 100000.0)
 
-	var target_x = lane_center(player_lane)
+	var target_x: float = lane_center(player_lane)
 	player_x = lerp(player_x, target_x, delta * LANE_MOVE_SPEED)
 
 	spawn_timer -= delta
+
 	if spawn_timer <= 0.0:
 		spawn_timer = spawn_interval
 		spawn_interval = max(0.45, spawn_interval - 0.01)
-		var lane = randi() % LANE_COUNT
-		var e_type = "car"
-		var roll = randf()
+
+		var lane: int = randi() % LANE_COUNT
+		var e_type := "car"
+		var roll: float = randf()
+
 		if roll < 0.25:
 			e_type = "coin"
 		elif roll < 0.4:
 			e_type = "cow"
-		entities.append({"id": next_id, "y": -40.0, "lane": lane, "type": e_type})
+
+		entities.append({
+			"id": next_id,
+			"y": -40.0,
+			"lane": lane,
+			"type": e_type
+		})
+
 		next_id += 1
 
 	var to_remove_ids := []
+
 	for e in entities:
-		e.y += SCROLL_SPEED * delta
-		if abs(e.y - PLAYER_Y) < 18.0 and e.lane == player_lane:
+		e.y += effective_scroll_speed * delta
+
+		if abs(e.y - PLAYER_Y) < 18.0 * ui_scale and e.lane == player_lane:
 			if e.type == "coin":
-				score += 50 * score_multiplier()
+				score += 50.0 * score_multiplier()
 				coins += 1
 				to_remove_ids.append(e.id)
 				play_sfx(sfx_coin)
@@ -304,26 +393,34 @@ func _process_gameplay(delta: float) -> void:
 					play_sfx(sfx_shield)
 				else:
 					end_run()
+
 		if e.y > SCREEN_H + 40.0:
 			to_remove_ids.append(e.id)
+
 	if to_remove_ids.size() > 0:
-		entities = entities.filter(func(e): return not to_remove_ids.has(e.id))
+		entities = entities.filter(
+			func(e: Dictionary) -> bool:
+				return not to_remove_ids.has(e.id)
+		)
 
 	for t in trees:
-		t.y += SCROLL_SPEED * delta
+		t.y += effective_scroll_speed * delta
+
 		if t.y > SCREEN_H + 60.0:
-			t.y -= 6 * 140.0
+			t.y -= trees.size() * tree_spacing
 
 func end_run() -> void:
 	state = GameState.GAME_OVER
 	play_sfx(sfx_crash)
+
 	if int(score) > high_score:
 		high_score = int(score)
+
 	save_game()
 
-# ---------- Drawing ----------
 func _draw() -> void:
 	var font := ThemeDB.fallback_font
+
 	match state:
 		GameState.LOADING:
 			draw_loading_screen(font)
@@ -345,28 +442,142 @@ func _draw() -> void:
 			draw_hud(font)
 			draw_gameover_screen(font)
 
-func draw_road_background() -> void:
-	draw_rect(Rect2(0, 0, SCREEN_W, SCREEN_H), Color(0.87, 0.68, 0.47))
-	draw_rect(Rect2(ROAD_LEFT, 0, ROAD_RIGHT - ROAD_LEFT, SCREEN_H), Color(0.2, 0.2, 0.22))
-	draw_rect(Rect2(ROAD_LEFT - 4, 0, 4, SCREEN_H), Color(0.95, 0.8, 0.1))
-	draw_rect(Rect2(ROAD_RIGHT, 0, 4, SCREEN_H), Color(0.95, 0.8, 0.1))
+func draw_shadow(pos: Vector2, radius: float, alpha: float = 0.25) -> void:
+	draw_set_transform(pos, 0.0, Vector2(1.0, 0.4))
+	draw_circle(Vector2.ZERO, radius, Color(0, 0, 0, alpha))
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
-	var dash_len := 50.0
-	var gap := 26.0
-	var dash_width := 10.0
-	var y := -scroll_offset
-	var center_x = ROAD_LEFT + (ROAD_RIGHT - ROAD_LEFT) / 2.0
-	while y < SCREEN_H:
-		draw_rect(Rect2(center_x - dash_width / 2.0, y, dash_width, dash_len), Color(1, 1, 1, 0.9))
-		y += dash_len + gap
+func draw_button(rect: Rect2, text: String, font: Font, color: Color, font_size: float) -> void:
+	draw_rect(
+		Rect2(rect.position + Vector2(0, 3.0 * ui_scale), rect.size),
+		Color(0, 0, 0, 0.25)
+	)
+	draw_rect(rect, color)
+	draw_rect(rect, Color(1, 1, 1, 0.08), false, 1.5 * ui_scale)
+
+	var text_size := font.get_string_size(
+		text,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1,
+		font_size
+	)
+
+	var ascent := font.get_ascent(font_size)
+	var descent := font.get_descent(font_size)
+
+	var pos := Vector2(
+		rect.position.x + (rect.size.x - text_size.x) / 2.0,
+		rect.position.y + (rect.size.y - ascent - descent) / 2.0 + ascent
+	)
+
+	draw_string(
+		font,
+		pos,
+		text,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1,
+		font_size,
+		Color(1, 1, 1)
+	)
+
+func draw_centered_text(font: Font, y: float, text: String, size: float, color: Color) -> void:
+	var width := font.get_string_size(
+		text,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1,
+		size
+	).x
+
+	var ascent := font.get_ascent(size)
+
+	draw_string(
+		font,
+		Vector2(SCREEN_W / 2.0 - width / 2.0, y + ascent),
+		text,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1,
+		size,
+		color
+	)
+
+func draw_road_background() -> void:
+	draw_rect(
+		Rect2(0, 0, SCREEN_W, SCREEN_H),
+		Color(0.56, 0.73, 0.36)
+	)
+
+	var stripe_h := 70.0 * ui_scale
+	var stripe_period := stripe_h * 2.0
+	var sy := fmod(scroll_offset * (stripe_h / 20.0), stripe_period) - stripe_period
+
+	while sy < SCREEN_H:
+		draw_rect(
+			Rect2(0, sy, ROAD_LEFT, stripe_h),
+			Color(0.51, 0.69, 0.33)
+		)
+
+		draw_rect(
+			Rect2(ROAD_RIGHT, sy, SCREEN_W - ROAD_RIGHT, stripe_h),
+			Color(0.51, 0.69, 0.33)
+		)
+
+		sy += stripe_period
+
+	draw_rect(
+		Rect2(ROAD_LEFT, 0, ROAD_RIGHT - ROAD_LEFT, SCREEN_H),
+		Color(0.21, 0.21, 0.24)
+	)
+
+	draw_rect(
+		Rect2(ROAD_LEFT, 0, 12.0 * ui_scale, SCREEN_H),
+		Color(0, 0, 0, 0.12)
+	)
+
+	draw_rect(
+		Rect2(ROAD_RIGHT - 12.0 * ui_scale, 0, 12.0 * ui_scale, SCREEN_H),
+		Color(0, 0, 0, 0.12)
+	)
+
+	draw_rect(
+		Rect2(ROAD_LEFT - 5.0 * ui_scale, 0, 5.0 * ui_scale, SCREEN_H),
+		Color(0.95, 0.8, 0.1)
+	)
+
+	draw_rect(
+		Rect2(ROAD_RIGHT, 0, 5.0 * ui_scale, SCREEN_H),
+		Color(0.95, 0.8, 0.1)
+	)
+
+	var dash_len := 46.0 * ui_scale
+	var gap := 30.0 * ui_scale
+	var dash_width := 6.0 * ui_scale
+	var dash_period := dash_len + gap
+
+	for lane_i in range(1, LANE_COUNT):
+		var lx := ROAD_LEFT + LANE_WIDTH * lane_i
+		var dy := fmod(scroll_offset, dash_period) - dash_period
+
+		while dy < SCREEN_H:
+			draw_rect(
+				Rect2(
+					lx - dash_width / 2.0,
+					dy,
+					dash_width,
+					dash_len
+				),
+				Color(1, 1, 1, 0.6)
+			)
+
+			dy += dash_period
 
 	for t in trees:
-		var tx = 40.0 if t.side == 0 else SCREEN_W - 40.0
+		var tx := ROAD_LEFT * 0.5 if t.side == 0 else ROAD_RIGHT + (SCREEN_W - ROAD_RIGHT) * 0.5
 		draw_tree(Vector2(tx, t.y))
 
 func draw_entities() -> void:
 	for e in entities:
-		var ex = lane_center(e.lane)
+		var ex := lane_center(e.lane)
+
 		if e.type == "car":
 			draw_car(Vector2(ex, e.y))
 		elif e.type == "coin":
@@ -375,169 +586,740 @@ func draw_entities() -> void:
 			draw_cow(Vector2(ex, e.y))
 
 func draw_hud(font: Font) -> void:
-	draw_string(font, Vector2(10, 30), "Score: %d" % int(score), HORIZONTAL_ALIGNMENT_LEFT, -1, 20, Color(1, 1, 1))
-	draw_string(font, Vector2(10, 54), "Best: %d" % high_score, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 0.85, 0.2))
-	draw_string(font, Vector2(10, 76), "Coins: %d" % coins, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.6, 0.9, 1))
+	var pad := 10.0 * ui_scale
+
+	draw_rect(
+		Rect2(
+			pad - 8.0 * ui_scale,
+			pad - 8.0 * ui_scale,
+			165.0 * ui_scale,
+			84.0 * ui_scale
+		),
+		Color(0, 0, 0, 0.3)
+	)
+
+	var score_size := 18.0 * ui_scale
+	var small_size := 14.0 * ui_scale
+
+	draw_string(
+		font,
+		Vector2(pad, pad + font.get_ascent(score_size)),
+		"Score: %d" % int(score),
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1,
+		score_size,
+		Color(1, 1, 1)
+	)
+
+	draw_string(
+		font,
+		Vector2(pad, pad + 23.0 * ui_scale + font.get_ascent(small_size)),
+		"Best: %d" % high_score,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1,
+		small_size,
+		Color(1, 0.85, 0.2)
+	)
+
+	draw_string(
+		font,
+		Vector2(pad, pad + 44.0 * ui_scale + font.get_ascent(small_size)),
+		"Coins: %d" % coins,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1,
+		small_size,
+		Color(0.6, 0.9, 1)
+	)
+
 	if shield_active:
-		draw_string(font, Vector2(SCREEN_W - 90, 30), "SHIELD", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.4, 0.8, 1))
+		var d_rect := discord_icon_rect()
+		var shield_text := "SHIELD"
+		var sfs := 14.0 * ui_scale
+		var sw := font.get_string_size(
+			shield_text,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1,
+			sfs
+		).x
+
+		var badge := Rect2(
+			SCREEN_W - sw - 20.0 * ui_scale,
+			d_rect.position.y + d_rect.size.y + 8.0 * ui_scale,
+			sw + 16.0 * ui_scale,
+			24.0 * ui_scale
+		)
+
+		draw_rect(badge, Color(0.15, 0.35, 0.5, 0.6))
+
+		draw_string(
+			font,
+			Vector2(
+				badge.position.x + 8.0 * ui_scale,
+				badge.position.y + (badge.size.y - font.get_ascent(sfs) - font.get_descent(sfs)) / 2.0 + font.get_ascent(sfs)
+			),
+			shield_text,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1,
+			sfs,
+			Color(0.6, 0.88, 1)
+		)
+
 	if state == GameState.PLAYING:
-		draw_string(font, Vector2(10, SCREEN_H - 15), "<- A/D or Left/Right ->", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(1, 1, 1, 0.7))
+		draw_centered_text(
+			font,
+			SCREEN_H - 30.0 * ui_scale,
+			"<- tap / A,D / arrows ->",
+			13.0 * ui_scale,
+			Color(1, 1, 1, 0.65)
+		)
 
 func draw_loading_screen(font: Font) -> void:
-	draw_rect(Rect2(0, 0, SCREEN_W, SCREEN_H), Color(0.13, 0.14, 0.17))
-	draw_godot_character(Vector2(SCREEN_W / 2.0, SCREEN_H / 2.0 - 60), false)
-	draw_string(font, Vector2(SCREEN_W / 2.0 - 62, SCREEN_H / 2.0 + 10), "ROAD DODGE", HORIZONTAL_ALIGNMENT_LEFT, -1, 26, Color(1, 1, 1))
-	var bar_w := 220.0
-	var bar_h := 14.0
+	draw_rect(
+		Rect2(0, 0, SCREEN_W, SCREEN_H),
+		Color(0.13, 0.14, 0.17)
+	)
+
+	draw_godot_character(
+		Vector2(
+			SCREEN_W / 2.0,
+			SCREEN_H / 2.0 - 60.0 * ui_scale
+		),
+		false
+	)
+
+	draw_centered_text(
+		font,
+		SCREEN_H / 2.0 + 10.0 * ui_scale,
+		"ROAD DODGE",
+		28.0 * ui_scale,
+		Color(1, 1, 1)
+	)
+
+	var bar_w: float = min(SCREEN_W * 0.6, 260.0)
+	var bar_h := 14.0 * ui_scale
 	var bar_x := SCREEN_W / 2.0 - bar_w / 2.0
-	var bar_y := SCREEN_H / 2.0 + 50.0
-	draw_rect(Rect2(bar_x, bar_y, bar_w, bar_h), Color(0.3, 0.3, 0.34))
-	var pct = clamp(loading_timer / LOADING_DURATION, 0.0, 1.0)
-	draw_rect(Rect2(bar_x, bar_y, bar_w * pct, bar_h), Color(0.28, 0.55, 0.75))
-	draw_string(font, Vector2(SCREEN_W / 2.0 - 32, bar_y + 34), "Loading...", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0.8, 0.8, 0.85))
+	var bar_y := SCREEN_H / 2.0 + 50.0 * ui_scale
+
+	draw_rect(
+		Rect2(bar_x, bar_y, bar_w, bar_h),
+		Color(0.3, 0.3, 0.34)
+	)
+
+	var pct: float = clamp(
+		loading_timer / LOADING_DURATION,
+		0.0,
+		1.0
+	)
+
+	draw_rect(
+		Rect2(bar_x, bar_y, bar_w * pct, bar_h),
+		Color(0.28, 0.55, 0.75)
+	)
+
+	draw_centered_text(
+		font,
+		bar_y + bar_h + 12.0 * ui_scale,
+		"Loading...",
+		14.0 * ui_scale,
+		Color(0.8, 0.8, 0.85)
+	)
 
 func draw_menu_screen(font: Font) -> void:
-	draw_rect(Rect2(0, 0, SCREEN_W, SCREEN_H), Color(0, 0, 0, 0.5))
-	draw_godot_character(Vector2(SCREEN_W / 2.0, SCREEN_H / 2.0 - 130), false)
-	draw_string(font, Vector2(SCREEN_W / 2.0 - 62, SCREEN_H / 2.0 - 50), "ROAD DODGE", HORIZONTAL_ALIGNMENT_LEFT, -1, 26, Color(1, 1, 1))
-	draw_string(font, Vector2(SCREEN_W / 2.0 - 65, SCREEN_H / 2.0 - 15), "Best: %d   Coins: %d" % [high_score, coins], HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color(1, 0.85, 0.2))
+	draw_rect(
+		Rect2(0, 0, SCREEN_W, SCREEN_H),
+		Color(0, 0, 0, 0.45)
+	)
 
-	var play_rect = menu_play_rect()
-	draw_rect(play_rect, Color(0.28, 0.55, 0.75))
-	draw_string(font, Vector2(play_rect.position.x + play_rect.size.x / 2.0 - 24, play_rect.position.y + 27), "PLAY", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color(1, 1, 1))
+	draw_godot_character(
+		Vector2(SCREEN_W / 2.0, SCREEN_H * 0.32),
+		false
+	)
 
-	var shop_rect = menu_shop_rect()
-	draw_rect(shop_rect, Color(0.3, 0.3, 0.34))
-	draw_string(font, Vector2(shop_rect.position.x + shop_rect.size.x / 2.0 - 40, shop_rect.position.y + 27), "UPGRADES", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 1, 1))
+	draw_centered_text(
+		font,
+		SCREEN_H * 0.44,
+		"ROAD DODGE",
+		30.0 * ui_scale,
+		Color(1, 1, 1)
+	)
 
-	draw_string(font, Vector2(SCREEN_W / 2.0 - 100, SCREEN_H / 2.0 + 150), "Tap, or SPACE / S on keyboard", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0.8, 0.8, 0.8))
+	draw_centered_text(
+		font,
+		SCREEN_H * 0.44 + 34.0 * ui_scale,
+		"Best: %d   Coins: %d" % [high_score, coins],
+		15.0 * ui_scale,
+		Color(1, 0.85, 0.2)
+	)
+
+	draw_button(
+		menu_play_rect(),
+		"PLAY",
+		font,
+		Color(0.28, 0.55, 0.75),
+		19.0 * ui_scale
+	)
+
+	draw_button(
+		menu_shop_rect(),
+		"UPGRADES",
+		font,
+		Color(0.3, 0.3, 0.34),
+		16.0 * ui_scale
+	)
+
+	draw_centered_text(
+		font,
+		SCREEN_H * 0.645 + SCREEN_H * 0.065 + 20.0 * ui_scale,
+		"Tap, or SPACE / S on keyboard",
+		13.0 * ui_scale,
+		Color(0.85, 0.85, 0.85)
+	)
+
 	draw_discord_icon(discord_icon_rect())
 
 func draw_shop_screen(font: Font) -> void:
-	draw_rect(Rect2(0, 0, SCREEN_W, SCREEN_H), Color(0, 0, 0, 0.65))
-	draw_string(font, Vector2(SCREEN_W / 2.0 - 45, 90), "UPGRADES", HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Color(1, 1, 1))
-	draw_string(font, Vector2(SCREEN_W / 2.0 - 45, 118), "Coins: %d" % coins, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.6, 0.9, 1))
+	draw_rect(
+		Rect2(0, 0, SCREEN_W, SCREEN_H),
+		Color(0, 0, 0, 0.62)
+	)
 
-	# Shield row
-	var r0 = shop_row_rect(0)
-	draw_rect(r0, Color(0.18, 0.18, 0.22))
-	var shield_status = "OWNED" if upg_shield >= 1 else "Cost: %d" % shield_cost()
-	var shield_col = Color(0.4, 1, 0.5) if upg_shield >= 1 else Color(1, 0.85, 0.4)
-	draw_string(font, Vector2(r0.position.x + 8, r0.position.y + 26), "[1] Shield - absorb one hit per run", HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color(1, 1, 1))
-	draw_string(font, Vector2(r0.position.x + 8, r0.position.y + 50), shield_status, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, shield_col)
+	draw_centered_text(
+		font,
+		SCREEN_H * 0.12,
+		"UPGRADES",
+		26.0 * ui_scale,
+		Color(1, 1, 1)
+	)
 
-	# Multiplier row
-	var r1 = shop_row_rect(1)
-	draw_rect(r1, Color(0.18, 0.18, 0.22))
-	var mult_status = "MAX LEVEL" if upg_multiplier >= MULT_MAX else "Cost: %d" % mult_cost()
-	draw_string(font, Vector2(r1.position.x + 8, r1.position.y + 26), "[2] Score Boost - Lv %d/%d (+%d%%)" % [upg_multiplier, MULT_MAX, int(upg_multiplier * MULT_STEP * 100)], HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color(1, 1, 1))
-	draw_string(font, Vector2(r1.position.x + 8, r1.position.y + 50), mult_status, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(1, 0.85, 0.4))
+	draw_centered_text(
+		font,
+		SCREEN_H * 0.12 + 30.0 * ui_scale,
+		"Coins: %d" % coins,
+		16.0 * ui_scale,
+		Color(0.6, 0.9, 1)
+	)
 
-	# Head start row
-	var r2 = shop_row_rect(2)
-	draw_rect(r2, Color(0.18, 0.18, 0.22))
-	var hs_status = "MAX LEVEL" if upg_headstart >= HEADSTART_MAX else "Cost: %d" % headstart_cost()
-	draw_string(font, Vector2(r2.position.x + 8, r2.position.y + 26), "[3] Head Start - Lv %d/%d (easier start)" % [upg_headstart, HEADSTART_MAX], HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color(1, 1, 1))
-	draw_string(font, Vector2(r2.position.x + 8, r2.position.y + 50), hs_status, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(0.6, 0.9, 1))
+	var rows := [
+		{
+			"rect": shop_row_rect(0),
+			"title": "[1] Shield - absorb one hit per run",
+			"status": "OWNED" if upg_shield >= 1 else "Cost: %d" % shield_cost(),
+			"col": Color(0.4, 1, 0.5) if upg_shield >= 1 else Color(1, 0.85, 0.4)
+		},
+		{
+			"rect": shop_row_rect(1),
+			"title": "[2] Score Boost - Lv %d/%d (+%d%%)" % [
+				upg_multiplier,
+				MULT_MAX,
+				int(upg_multiplier * MULT_STEP * 100)
+			],
+			"status": "MAX LEVEL" if upg_multiplier >= MULT_MAX else "Cost: %d" % mult_cost(),
+			"col": Color(1, 0.85, 0.4)
+		},
+		{
+			"rect": shop_row_rect(2),
+			"title": "[3] Head Start - Lv %d/%d (easier start)" % [
+				upg_headstart,
+				HEADSTART_MAX
+			],
+			"status": "MAX LEVEL" if upg_headstart >= HEADSTART_MAX else "Cost: %d" % headstart_cost(),
+			"col": Color(0.6, 0.9, 1)
+		}
+	]
 
-	var back_rect = shop_back_rect()
-	draw_rect(back_rect, Color(0.3, 0.3, 0.34))
-	draw_string(font, Vector2(back_rect.position.x + back_rect.size.x / 2.0 - 24, back_rect.position.y + 25), "BACK", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 1, 1))
+	for row in rows:
+		var r: Rect2 = row["rect"]
+		var title_size := 15.0 * ui_scale
+		var status_size := 14.0 * ui_scale
+
+		draw_rect(
+			Rect2(
+				r.position + Vector2(0, 3.0 * ui_scale),
+				r.size
+			),
+			Color(0, 0, 0, 0.2)
+		)
+
+		draw_rect(
+			r,
+			Color(0.18, 0.18, 0.22)
+		)
+
+		var title_y := r.position.y + r.size.y * 0.35
+		var status_y := r.position.y + r.size.y * 0.67
+
+		draw_string(
+			font,
+			Vector2(
+				r.position.x + 14.0 * ui_scale,
+				title_y + font.get_ascent(title_size)
+			),
+			row["title"],
+			HORIZONTAL_ALIGNMENT_LEFT,
+			int(r.size.x - 24.0 * ui_scale),
+			title_size,
+			Color(1, 1, 1)
+		)
+
+		draw_string(
+			font,
+			Vector2(
+				r.position.x + 14.0 * ui_scale,
+				status_y + font.get_ascent(status_size)
+			),
+			row["status"],
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1,
+			status_size,
+			row["col"]
+		)
+
+	draw_button(
+		shop_back_rect(),
+		"BACK",
+		font,
+		Color(0.3, 0.3, 0.34),
+		16.0 * ui_scale
+	)
+
 	draw_discord_icon(discord_icon_rect())
 
 func draw_gameover_screen(font: Font) -> void:
-	draw_rect(Rect2(0, 0, SCREEN_W, SCREEN_H), Color(0, 0, 0, 0.55))
-	draw_sad_face(Vector2(SCREEN_W / 2.0, SCREEN_H / 2.0 - 70))
-	draw_string(font, Vector2(SCREEN_W / 2.0 - 60, SCREEN_H / 2.0 + 10), "GAME OVER", HORIZONTAL_ALIGNMENT_LEFT, -1, 28, Color(1, 1, 1))
-	draw_string(font, Vector2(SCREEN_W / 2.0 - 55, SCREEN_H / 2.0 + 45), "Score: %d" % int(score), HORIZONTAL_ALIGNMENT_LEFT, -1, 20, Color(1, 1, 1))
-	var best_col = Color(1, 0.85, 0.2) if int(score) < high_score else Color(0.3, 1, 0.4)
-	var best_label = "Best: %d" % high_score if int(score) < high_score else "NEW BEST: %d" % high_score
-	draw_string(font, Vector2(SCREEN_W / 2.0 - 55, SCREEN_H / 2.0 + 72), best_label, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, best_col)
-	draw_string(font, Vector2(SCREEN_W / 2.0 - 95, SCREEN_H / 2.0 + 105), "Press any key to continue", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.9, 0.9, 0.9))
+	draw_rect(
+		Rect2(0, 0, SCREEN_W, SCREEN_H),
+		Color(0, 0, 0, 0.55)
+	)
+
+	draw_sad_face(
+		Vector2(
+			SCREEN_W / 2.0,
+			SCREEN_H / 2.0 - 70.0 * ui_scale
+		)
+	)
+
+	draw_centered_text(
+		font,
+		SCREEN_H / 2.0 + 10.0 * ui_scale,
+		"GAME OVER",
+		28.0 * ui_scale,
+		Color(1, 1, 1)
+	)
+
+	draw_centered_text(
+		font,
+		SCREEN_H / 2.0 + 45.0 * ui_scale,
+		"Score: %d" % int(score),
+		20.0 * ui_scale,
+		Color(1, 1, 1)
+	)
+
+	var best_col := Color(1, 0.85, 0.2) if int(score) < high_score else Color(0.3, 1, 0.4)
+	var best_label := "Best: %d" % high_score if int(score) < high_score else "NEW BEST: %d" % high_score
+
+	draw_centered_text(
+		font,
+		SCREEN_H / 2.0 + 72.0 * ui_scale,
+		best_label,
+		18.0 * ui_scale,
+		best_col
+	)
+
+	draw_centered_text(
+		font,
+		SCREEN_H / 2.0 + 105.0 * ui_scale,
+		"Press any key to continue",
+		16.0 * ui_scale,
+		Color(0.9, 0.9, 0.9)
+	)
+
 	draw_discord_icon(discord_icon_rect())
 
 func draw_tree(pos: Vector2) -> void:
-	draw_rect(Rect2(pos.x - 3, pos.y, 6, 20), Color(0.4, 0.25, 0.1))
-	draw_circle(pos + Vector2(0, -10), 16, Color(0.2, 0.6, 0.25))
+	draw_shadow(
+		pos + Vector2(0, 8.0 * ui_scale),
+		14.0 * ui_scale,
+		0.2
+	)
+
+	draw_rect(
+		Rect2(
+			pos.x - 3.0 * ui_scale,
+			pos.y - 4.0 * ui_scale,
+			6.0 * ui_scale,
+			22.0 * ui_scale
+		),
+		Color(0.38, 0.24, 0.1)
+	)
+
+	draw_circle(
+		pos + Vector2(0, -12.0 * ui_scale),
+		17.0 * ui_scale,
+		Color(0.16, 0.5, 0.21)
+	)
+
+	draw_circle(
+		pos + Vector2(-5.0 * ui_scale, -18.0 * ui_scale),
+		11.0 * ui_scale,
+		Color(0.24, 0.62, 0.28)
+	)
 
 func draw_car(pos: Vector2) -> void:
-	var w := 26.0
-	var h := 40.0
-	draw_rect(Rect2(pos.x - w / 2, pos.y - h / 2, w, h), Color(0.8, 0.15, 0.15))
-	draw_rect(Rect2(pos.x - w / 2 + 3, pos.y - h / 2 + 6, w - 6, 10), Color(0.6, 0.85, 0.95))
-	draw_circle(pos + Vector2(-w / 2, h / 2 - 4), 4, Color(0.05, 0.05, 0.05))
-	draw_circle(pos + Vector2(w / 2, h / 2 - 4), 4, Color(0.05, 0.05, 0.05))
-	draw_circle(pos + Vector2(-w / 2, -h / 2 + 4), 4, Color(0.05, 0.05, 0.05))
-	draw_circle(pos + Vector2(w / 2, -h / 2 + 4), 4, Color(0.05, 0.05, 0.05))
+	var w := 28.0 * ui_scale
+	var h := 44.0 * ui_scale
+
+	draw_shadow(
+		pos + Vector2(0, h * 0.5),
+		w * 0.6,
+		0.22
+	)
+
+	draw_rect(
+		Rect2(
+			pos.x - w / 2.0,
+			pos.y - h / 2.0,
+			w,
+			h
+		),
+		Color(0.82, 0.16, 0.16)
+	)
+
+	draw_rect(
+		Rect2(
+			pos.x - w / 2.0 + w * 0.12,
+			pos.y - h / 2.0 + h * 0.14,
+			w - w * 0.24,
+			h * 0.26
+		),
+		Color(0.65, 0.87, 0.96)
+	)
+
+	draw_rect(
+		Rect2(
+			pos.x - w / 2.0 + w * 0.12,
+			pos.y + h * 0.06,
+			w - w * 0.24,
+			h * 0.2
+		),
+		Color(0.65, 0.87, 0.96, 0.75)
+	)
+
+	var wheel_r := 4.0 * ui_scale
+
+	draw_circle(
+		pos + Vector2(-w / 2.0, h / 2.0 - wheel_r),
+		wheel_r,
+		Color(0.05, 0.05, 0.05)
+	)
+
+	draw_circle(
+		pos + Vector2(w / 2.0, h / 2.0 - wheel_r),
+		wheel_r,
+		Color(0.05, 0.05, 0.05)
+	)
+
+	draw_circle(
+		pos + Vector2(-w / 2.0, -h / 2.0 + wheel_r),
+		wheel_r,
+		Color(0.05, 0.05, 0.05)
+	)
+
+	draw_circle(
+		pos + Vector2(w / 2.0, -h / 2.0 + wheel_r),
+		wheel_r,
+		Color(0.05, 0.05, 0.05)
+	)
 
 func draw_coin(pos: Vector2) -> void:
-	draw_circle(pos, 9, Color(0.95, 0.85, 0.2))
-	draw_arc(pos, 9, 0, TAU, 16, Color(0.6, 0.5, 0.05), 2.0)
+	draw_shadow(
+		pos + Vector2(0, 7.0 * ui_scale),
+		8.0 * ui_scale,
+		0.18
+	)
+
+	draw_circle(
+		pos,
+		9.0 * ui_scale,
+		Color(0.95, 0.85, 0.2)
+	)
+
+	draw_arc(
+		pos,
+		9.0 * ui_scale,
+		0,
+		TAU,
+		16,
+		Color(0.6, 0.5, 0.05),
+		2.0 * ui_scale
+	)
+
+	draw_circle(
+		pos + Vector2(-2.5 * ui_scale, -2.5 * ui_scale),
+		2.4 * ui_scale,
+		Color(1, 1, 0.85, 0.85)
+	)
 
 func draw_cow(pos: Vector2) -> void:
-	draw_rect(Rect2(pos.x - 12, pos.y - 8, 24, 18), Color(0.95, 0.95, 0.95))
-	draw_circle(pos + Vector2(-6, -2), 3, Color(0.1, 0.1, 0.1))
-	draw_circle(pos + Vector2(5, 4), 3, Color(0.1, 0.1, 0.1))
-	draw_circle(pos + Vector2(0, -10), 7, Color(0.95, 0.95, 0.95))
+	draw_shadow(
+		pos + Vector2(0, 9.0 * ui_scale),
+		13.0 * ui_scale,
+		0.2
+	)
+
+	draw_rect(
+		Rect2(
+			pos.x - 12.0 * ui_scale,
+			pos.y - 8.0 * ui_scale,
+			24.0 * ui_scale,
+			18.0 * ui_scale
+		),
+		Color(0.95, 0.95, 0.95)
+	)
+
+	draw_circle(
+		pos + Vector2(-4.0 * ui_scale, 1.0 * ui_scale),
+		3.5 * ui_scale,
+		Color(0.15, 0.15, 0.17)
+	)
+
+	draw_circle(
+		pos + Vector2(6.0 * ui_scale, -3.0 * ui_scale),
+		3.0 * ui_scale,
+		Color(0.15, 0.15, 0.17)
+	)
+
+	draw_circle(
+		pos + Vector2(-6.0 * ui_scale, -2.0 * ui_scale),
+		3.0 * ui_scale,
+		Color(0.1, 0.1, 0.1)
+	)
+
+	draw_circle(
+		pos + Vector2(5.0 * ui_scale, 4.0 * ui_scale),
+		3.0 * ui_scale,
+		Color(0.1, 0.1, 0.1)
+	)
+
+	draw_circle(
+		pos + Vector2(0, -10.0 * ui_scale),
+		7.0 * ui_scale,
+		Color(0.95, 0.95, 0.95)
+	)
 
 func draw_godot_character(pos: Vector2, is_dead: bool) -> void:
+	draw_shadow(
+		pos + Vector2(0, 26.0 * ui_scale),
+		20.0 * ui_scale,
+		0.22
+	)
+
 	if shield_active and state == GameState.PLAYING:
-		draw_circle(pos, 30, Color(0.4, 0.8, 1, 0.25))
-		draw_arc(pos, 30, 0, TAU, 24, Color(0.4, 0.8, 1, 0.8), 2.0)
+		draw_circle(
+			pos,
+			30.0 * ui_scale,
+			Color(0.4, 0.8, 1, 0.25)
+		)
+
+		draw_arc(
+			pos,
+			30.0 * ui_scale,
+			0,
+			TAU,
+			24,
+			Color(0.4, 0.8, 1, 0.8),
+			2.0 * ui_scale
+		)
+
 	if player_texture:
-		var tex_size = player_texture.get_size()
-		var target_size = Vector2(48, 48)
-		var scale_factor = min(target_size.x / tex_size.x, target_size.y / tex_size.y)
-		var draw_size = tex_size * scale_factor
-		var rect = Rect2(pos - draw_size / 2.0, draw_size)
-		var tint = Color(1, 0.55, 0.55) if is_dead else Color(1, 1, 1)
-		draw_texture_rect(player_texture, rect, false, tint)
+		var tex_size := player_texture.get_size()
+		var target_size := Vector2(48, 48) * ui_scale
+		var scale_factor: float = min(
+			target_size.x / tex_size.x,
+			target_size.y / tex_size.y
+		)
+
+		var draw_size := tex_size * scale_factor
+		var rect := Rect2(pos - draw_size / 2.0, draw_size)
+		var tint := Color(1, 0.55, 0.55) if is_dead else Color(1, 1, 1)
+
+		draw_texture_rect(
+			player_texture,
+			rect,
+			false,
+			tint
+		)
+
 		return
+
 	draw_godot_character_fallback(pos, is_dead)
 
 func draw_godot_character_fallback(pos: Vector2, is_dead: bool) -> void:
-	# Used only if res://icon.svg isn't found - a drawn approximation of
-	# Godot's blue robot mascot so the game still looks right without it.
-	var body_col = Color(0.28, 0.55, 0.75) if is_dead else Color(0.28, 0.55, 0.75, 1.0)
-	var size = 22.0
+	var body_col := Color(0.28, 0.55, 0.75) if is_dead else Color(0.28, 0.55, 0.75, 1.0)
+	var size := 22.0 * ui_scale
 
-	draw_rect(Rect2(pos.x - size * 0.75, pos.y - size * 1.15, size * 0.22, size * 0.4), body_col)
-	draw_rect(Rect2(pos.x + size * 0.53, pos.y - size * 1.15, size * 0.22, size * 0.4), body_col)
+	draw_rect(
+		Rect2(
+			pos.x - size * 0.75,
+			pos.y - size * 1.15,
+			size * 0.22,
+			size * 0.4
+		),
+		body_col
+	)
 
-	draw_circle(pos + Vector2(0, -size * 0.2), size * 0.95, body_col)
-	draw_rect(Rect2(pos.x - size * 0.95, pos.y - size * 0.2, size * 1.9, size * 1.0), body_col)
-	draw_circle(pos + Vector2(0, size * 0.8), size * 0.95, body_col)
+	draw_rect(
+		Rect2(
+			pos.x + size * 0.53,
+			pos.y - size * 1.15,
+			size * 0.22,
+			size * 0.4
+		),
+		body_col
+	)
 
-	var eye_col = Color(0.4, 0.1, 0.1) if is_dead else Color(1, 1, 1)
-	var pupil_col = Color(0.2, 0, 0) if is_dead else Color(0.1, 0.1, 0.15)
-	draw_circle(pos + Vector2(-size * 0.42, -size * 0.05), size * 0.32, eye_col)
-	draw_circle(pos + Vector2(size * 0.42, -size * 0.05), size * 0.32, eye_col)
+	draw_circle(
+		pos + Vector2(0, -size * 0.2),
+		size * 0.95,
+		body_col
+	)
+
+	draw_rect(
+		Rect2(
+			pos.x - size * 0.95,
+			pos.y - size * 0.2,
+			size * 1.9,
+			size * 1.0
+		),
+		body_col
+	)
+
+	draw_circle(
+		pos + Vector2(0, size * 0.8),
+		size * 0.95,
+		body_col
+	)
+
+	var eye_col := Color(0.4, 0.1, 0.1) if is_dead else Color(1, 1, 1)
+	var pupil_col := Color(0.2, 0, 0) if is_dead else Color(0.1, 0.1, 0.15)
+
+	draw_circle(
+		pos + Vector2(-size * 0.42, -size * 0.05),
+		size * 0.32,
+		eye_col
+	)
+
+	draw_circle(
+		pos + Vector2(size * 0.42, -size * 0.05),
+		size * 0.32,
+		eye_col
+	)
+
 	if not is_dead:
-		draw_circle(pos + Vector2(-size * 0.42, -size * 0.02), size * 0.14, pupil_col)
-		draw_circle(pos + Vector2(size * 0.42, -size * 0.02), size * 0.14, pupil_col)
+		draw_circle(
+			pos + Vector2(-size * 0.42, -size * 0.02),
+			size * 0.14,
+			pupil_col
+		)
+
+		draw_circle(
+			pos + Vector2(size * 0.42, -size * 0.02),
+			size * 0.14,
+			pupil_col
+		)
 	else:
-		var o = size * 0.14
-		draw_line(pos + Vector2(-size * 0.42 - o, -size * 0.05 - o), pos + Vector2(-size * 0.42 + o, -size * 0.05 + o), pupil_col, 2.0)
-		draw_line(pos + Vector2(-size * 0.42 - o, -size * 0.05 + o), pos + Vector2(-size * 0.42 + o, -size * 0.05 - o), pupil_col, 2.0)
-		draw_line(pos + Vector2(size * 0.42 - o, -size * 0.05 - o), pos + Vector2(size * 0.42 + o, -size * 0.05 + o), pupil_col, 2.0)
-		draw_line(pos + Vector2(size * 0.42 - o, -size * 0.05 + o), pos + Vector2(size * 0.42 + o, -size * 0.05 - o), pupil_col, 2.0)
+		var o := size * 0.14
+
+		draw_line(
+			pos + Vector2(-size * 0.42 - o, -size * 0.05 - o),
+			pos + Vector2(-size * 0.42 + o, -size * 0.05 + o),
+			pupil_col,
+			2.0 * ui_scale
+		)
+
+		draw_line(
+			pos + Vector2(-size * 0.42 - o, -size * 0.05 + o),
+			pos + Vector2(-size * 0.42 + o, -size * 0.05 - o),
+			pupil_col,
+			2.0 * ui_scale
+		)
+
+		draw_line(
+			pos + Vector2(size * 0.42 - o, -size * 0.05 - o),
+			pos + Vector2(size * 0.42 + o, -size * 0.05 + o),
+			pupil_col,
+			2.0 * ui_scale
+		)
+
+		draw_line(
+			pos + Vector2(size * 0.42 - o, -size * 0.05 + o),
+			pos + Vector2(size * 0.42 + o, -size * 0.05 - o),
+			pupil_col,
+			2.0 * ui_scale
+		)
 
 func draw_sad_face(pos: Vector2) -> void:
-	draw_circle(pos, 30, Color(0.95, 0.8, 0.2))
-	draw_circle(pos + Vector2(-10, -8), 4, Color(0, 0, 0))
-	draw_circle(pos + Vector2(10, -8), 4, Color(0, 0, 0))
-	draw_arc(pos + Vector2(0, 18), 12, PI + 0.3, TAU - 0.3, 12, Color(0, 0, 0), 2.0)
+	draw_shadow(
+		pos + Vector2(0, 35.0 * ui_scale),
+		24.0 * ui_scale,
+		0.2
+	)
+
+	draw_circle(
+		pos,
+		30.0 * ui_scale,
+		Color(0.95, 0.8, 0.2)
+	)
+
+	draw_circle(
+		pos + Vector2(-10.0 * ui_scale, -8.0 * ui_scale),
+		4.0 * ui_scale,
+		Color(0, 0, 0)
+	)
+
+	draw_circle(
+		pos + Vector2(10.0 * ui_scale, -8.0 * ui_scale),
+		4.0 * ui_scale,
+		Color(0, 0, 0)
+	)
+
+	draw_arc(
+		pos + Vector2(0, 18.0 * ui_scale),
+		12.0 * ui_scale,
+		PI + 0.3,
+		TAU - 0.3,
+		12,
+		Color(0, 0, 0),
+		2.0 * ui_scale
+	)
 
 func draw_discord_icon(rect: Rect2) -> void:
-	#dihcord icon
-	var center = rect.position + rect.size / 2.0
-	var radius = rect.size.x / 2.0
-	var blurple = Color(0.345, 0.396, 0.949)
-	draw_circle(center, radius, blurple)
-	var eye_r = radius * 0.22
-	var eye_off = radius * 0.38
-	draw_circle(center + Vector2(-eye_off, -radius * 0.05), eye_r, Color(1, 1, 1))
-	draw_circle(center + Vector2(eye_off, -radius * 0.05), eye_r, Color(1, 1, 1))
+	var center := rect.position + rect.size / 2.0
+	var radius := rect.size.x / 2.0
+	var blurple := Color(0.345, 0.396, 0.949)
+	var eye_r := radius * 0.22
+	var eye_off := radius * 0.38
 
-	draw_circle(center + Vector2(-radius * 0.95, -radius * 0.35), radius * 0.28, blurple)
-	draw_circle(center + Vector2(radius * 0.95, -radius * 0.35), radius * 0.28, blurple)
+	draw_circle(center, radius, blurple)
+
+	draw_circle(
+		center + Vector2(-eye_off, -radius * 0.05),
+		eye_r,
+		Color(1, 1, 1)
+	)
+
+	draw_circle(
+		center + Vector2(eye_off, -radius * 0.05),
+		eye_r,
+		Color(1, 1, 1)
+	)
+
+	draw_circle(
+		center + Vector2(-radius * 0.95, -radius * 0.35),
+		radius * 0.28,
+		blurple
+	)
+
+	draw_circle(
+		center + Vector2(radius * 0.95, -radius * 0.35),
+		radius * 0.28,
+		blurple
+	)
