@@ -343,69 +343,79 @@ func _process(delta: float) -> void:
 	queue_redraw()
 
 func _process_gameplay(delta: float) -> void:
-	score += delta * 10.0 * score_multiplier()
+	var mult := score_multiplier()
+	score += delta * 10.0 * mult
 	scroll_offset = fmod(scroll_offset + effective_scroll_speed * delta, 100000.0)
 
-	var target_x: float = lane_center(player_lane)
-	player_x = lerp(player_x, target_x, delta * LANE_MOVE_SPEED)
+	player_x = lerp(player_x, lane_center(player_lane), delta * LANE_MOVE_SPEED)
 
+	_update_spawning(delta)
+	_update_entities(delta, mult)
+	_update_trees(delta)
+
+
+func _update_spawning(delta: float) -> void:
 	spawn_timer -= delta
+	if spawn_timer > 0.0:
+		return
+	spawn_timer = spawn_interval
+	spawn_interval = max(0.45, spawn_interval - 0.01)
 
-	if spawn_timer <= 0.0:
-		spawn_timer = spawn_interval
-		spawn_interval = max(0.45, spawn_interval - 0.01)
+	var roll: float = randf()
+	var e_type := "car"
+	if roll < 0.25:
+		e_type = "coin"
+	elif roll < 0.4:
+		e_type = "cow"
 
-		var lane: int = randi() % LANE_COUNT
-		var e_type := "car"
-		var roll: float = randf()
+	entities.append({
+		"id": next_id,
+		"y": -40.0,
+		"lane": randi() % LANE_COUNT,
+		"type": e_type
+	})
+	next_id += 1
 
-		if roll < 0.25:
-			e_type = "coin"
-		elif roll < 0.4:
-			e_type = "cow"
 
-		entities.append({
-			"id": next_id,
-			"y": -40.0,
-			"lane": lane,
-			"type": e_type
-		})
-
-		next_id += 1
-
-	var to_remove_ids := []
+func _update_entities(delta: float, mult: float) -> void:
+	var move: float = effective_scroll_speed * delta
+	var hit_range: float = 18.0 * ui_scale
+	var kept: Array = []
+	kept.resize(entities.size())
+	var kept_count := 0
 
 	for e in entities:
-		e.y += effective_scroll_speed * delta
+		e.y += move
 
-		if abs(e.y - PLAYER_Y) < 18.0 * ui_scale and e.lane == player_lane:
+		if abs(e.y - PLAYER_Y) < hit_range and e.lane == player_lane:
 			if e.type == "coin":
-				score += 50.0 * score_multiplier()
+				score += 50.0 * mult
 				coins += 1
-				to_remove_ids.append(e.id)
 				play_sfx(sfx_coin)
+				continue
+			elif shield_active:
+				shield_active = false
+				play_sfx(sfx_shield)
+				continue
 			else:
-				if shield_active:
-					shield_active = false
-					to_remove_ids.append(e.id)
-					play_sfx(sfx_shield)
-				else:
-					end_run()
+				end_run()
+				return
 
-		if e.y > SCREEN_H + 40.0:
-			to_remove_ids.append(e.id)
+		if e.y <= SCREEN_H + 40.0:
+			kept[kept_count] = e
+			kept_count += 1
 
-	if to_remove_ids.size() > 0:
-		entities = entities.filter(
-			func(e: Dictionary) -> bool:
-				return not to_remove_ids.has(e.id)
-		)
+	kept.resize(kept_count)
+	entities = kept
 
+
+func _update_trees(delta: float) -> void:
+	var move: float = effective_scroll_speed * delta
+	var wrap_offset: float = trees.size() * tree_spacing
 	for t in trees:
-		t.y += effective_scroll_speed * delta
-
+		t.y += move
 		if t.y > SCREEN_H + 60.0:
-			t.y -= trees.size() * tree_spacing
+			t.y -= wrap_offset
 
 func end_run() -> void:
 	state = GameState.GAME_OVER
