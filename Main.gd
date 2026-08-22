@@ -196,72 +196,70 @@ func buy_headstart() -> void:
 		play_sfx(sfx_upgrade)
 
 func _unhandled_input(event: InputEvent) -> void:
-	var key_pressed: bool = event is InputEventKey and event.pressed
-	var tap_pos: Variant = null
-
-	if event is InputEventScreenTouch and event.pressed:
-		tap_pos = event.position
-	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		tap_pos = event.position
+	var keycode: int = event.keycode if (event is InputEventKey and event.pressed) else -1
+	var tap_pos: Variant = _get_tap_pos(event)
+	
+	if tap_pos != null and state != GameState.PLAYING and discord_icon_rect().has_point(tap_pos):
+		open_discord()
+		return
 
 	match state:
 		GameState.MENU:
-			if key_pressed:
-				if event.keycode == KEY_SPACE or event.keycode == KEY_ENTER:
-					start_run()
-				elif event.keycode == KEY_S:
-					state = GameState.SHOP
+			if keycode == KEY_SPACE or keycode == KEY_ENTER:
+				start_run()
+			elif keycode == KEY_S:
+				state = GameState.SHOP
 			elif tap_pos != null:
-				if discord_icon_rect().has_point(tap_pos):
-					open_discord()
-				elif menu_shop_rect().has_point(tap_pos):
+				if menu_shop_rect().has_point(tap_pos):
 					state = GameState.SHOP
 				elif menu_play_rect().has_point(tap_pos):
 					start_run()
 
 		GameState.SHOP:
-			if key_pressed:
-				if event.keycode == KEY_1:
-					buy_shield()
-				elif event.keycode == KEY_2:
-					buy_multiplier()
-				elif event.keycode == KEY_3:
-					buy_headstart()
-				elif event.keycode == KEY_ESCAPE or event.keycode == KEY_SPACE:
-					state = GameState.MENU
+			var shop_actions := [buy_shield, buy_multiplier, buy_headstart]
+			if keycode in [KEY_1, KEY_2, KEY_3]:
+				shop_actions[keycode - KEY_1].call()
+			elif keycode == KEY_ESCAPE or keycode == KEY_SPACE:
+				state = GameState.MENU
 			elif tap_pos != null:
-				if discord_icon_rect().has_point(tap_pos):
-					open_discord()
-				elif shop_row_rect(0).has_point(tap_pos):
-					buy_shield()
-				elif shop_row_rect(1).has_point(tap_pos):
-					buy_multiplier()
-				elif shop_row_rect(2).has_point(tap_pos):
-					buy_headstart()
-				elif shop_back_rect().has_point(tap_pos):
+				if shop_back_rect().has_point(tap_pos):
 					state = GameState.MENU
+				else:
+					for i in shop_actions.size():
+						if shop_row_rect(i).has_point(tap_pos):
+							shop_actions[i].call()
+							break
 
 		GameState.PLAYING:
-			if key_pressed:
-				if (event.keycode == KEY_LEFT or event.keycode == KEY_A) and player_lane > 0:
-					player_lane -= 1
-					play_sfx(sfx_switch)
-				elif (event.keycode == KEY_RIGHT or event.keycode == KEY_D) and player_lane < LANE_COUNT - 1:
-					player_lane += 1
-					play_sfx(sfx_switch)
+			var dir := 0
+			if keycode == KEY_LEFT or keycode == KEY_A:
+				dir = -1
+			elif keycode == KEY_RIGHT or keycode == KEY_D:
+				dir = 1
 			elif tap_pos != null:
-				if tap_pos.x < SCREEN_W / 2.0 and player_lane > 0:
-					player_lane -= 1
-					play_sfx(sfx_switch)
-				elif tap_pos.x >= SCREEN_W / 2.0 and player_lane < LANE_COUNT - 1:
-					player_lane += 1
-					play_sfx(sfx_switch)
+				dir = -1 if tap_pos.x < SCREEN_W / 2.0 else 1
+			_try_switch_lane(dir)
 
 		GameState.GAME_OVER:
-			if tap_pos != null and discord_icon_rect().has_point(tap_pos):
-				open_discord()
-			elif key_pressed or tap_pos != null:
+			if keycode != -1 or tap_pos != null:
 				state = GameState.MENU
+
+
+func _get_tap_pos(event: InputEvent) -> Variant:
+	if event is InputEventScreenTouch and event.pressed:
+		return event.position
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		return event.position
+	return null
+
+
+func _try_switch_lane(dir: int) -> void:
+	if dir == 0:
+		return
+	var new_lane := player_lane + dir
+	if new_lane >= 0 and new_lane < LANE_COUNT:
+		player_lane = new_lane
+		play_sfx(sfx_switch)
 
 func open_discord() -> void:
 	OS.shell_open(DISCORD_URL)
