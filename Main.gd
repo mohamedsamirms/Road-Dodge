@@ -196,72 +196,70 @@ func buy_headstart() -> void:
 		play_sfx(sfx_upgrade)
 
 func _unhandled_input(event: InputEvent) -> void:
-	var key_pressed: bool = event is InputEventKey and event.pressed
-	var tap_pos: Variant = null
-
-	if event is InputEventScreenTouch and event.pressed:
-		tap_pos = event.position
-	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		tap_pos = event.position
+	var keycode: int = event.keycode if (event is InputEventKey and event.pressed) else -1
+	var tap_pos: Variant = _get_tap_pos(event)
+	
+	if tap_pos != null and state != GameState.PLAYING and discord_icon_rect().has_point(tap_pos):
+		open_discord()
+		return
 
 	match state:
 		GameState.MENU:
-			if key_pressed:
-				if event.keycode == KEY_SPACE or event.keycode == KEY_ENTER:
-					start_run()
-				elif event.keycode == KEY_S:
-					state = GameState.SHOP
+			if keycode == KEY_SPACE or keycode == KEY_ENTER:
+				start_run()
+			elif keycode == KEY_S:
+				state = GameState.SHOP
 			elif tap_pos != null:
-				if discord_icon_rect().has_point(tap_pos):
-					open_discord()
-				elif menu_shop_rect().has_point(tap_pos):
+				if menu_shop_rect().has_point(tap_pos):
 					state = GameState.SHOP
 				elif menu_play_rect().has_point(tap_pos):
 					start_run()
 
 		GameState.SHOP:
-			if key_pressed:
-				if event.keycode == KEY_1:
-					buy_shield()
-				elif event.keycode == KEY_2:
-					buy_multiplier()
-				elif event.keycode == KEY_3:
-					buy_headstart()
-				elif event.keycode == KEY_ESCAPE or event.keycode == KEY_SPACE:
-					state = GameState.MENU
+			var shop_actions := [buy_shield, buy_multiplier, buy_headstart]
+			if keycode in [KEY_1, KEY_2, KEY_3]:
+				shop_actions[keycode - KEY_1].call()
+			elif keycode == KEY_ESCAPE or keycode == KEY_SPACE:
+				state = GameState.MENU
 			elif tap_pos != null:
-				if discord_icon_rect().has_point(tap_pos):
-					open_discord()
-				elif shop_row_rect(0).has_point(tap_pos):
-					buy_shield()
-				elif shop_row_rect(1).has_point(tap_pos):
-					buy_multiplier()
-				elif shop_row_rect(2).has_point(tap_pos):
-					buy_headstart()
-				elif shop_back_rect().has_point(tap_pos):
+				if shop_back_rect().has_point(tap_pos):
 					state = GameState.MENU
+				else:
+					for i in shop_actions.size():
+						if shop_row_rect(i).has_point(tap_pos):
+							shop_actions[i].call()
+							break
 
 		GameState.PLAYING:
-			if key_pressed:
-				if (event.keycode == KEY_LEFT or event.keycode == KEY_A) and player_lane > 0:
-					player_lane -= 1
-					play_sfx(sfx_switch)
-				elif (event.keycode == KEY_RIGHT or event.keycode == KEY_D) and player_lane < LANE_COUNT - 1:
-					player_lane += 1
-					play_sfx(sfx_switch)
+			var dir := 0
+			if keycode == KEY_LEFT or keycode == KEY_A:
+				dir = -1
+			elif keycode == KEY_RIGHT or keycode == KEY_D:
+				dir = 1
 			elif tap_pos != null:
-				if tap_pos.x < SCREEN_W / 2.0 and player_lane > 0:
-					player_lane -= 1
-					play_sfx(sfx_switch)
-				elif tap_pos.x >= SCREEN_W / 2.0 and player_lane < LANE_COUNT - 1:
-					player_lane += 1
-					play_sfx(sfx_switch)
+				dir = -1 if tap_pos.x < SCREEN_W / 2.0 else 1
+			_try_switch_lane(dir)
 
 		GameState.GAME_OVER:
-			if tap_pos != null and discord_icon_rect().has_point(tap_pos):
-				open_discord()
-			elif key_pressed or tap_pos != null:
+			if keycode != -1 or tap_pos != null:
 				state = GameState.MENU
+
+
+func _get_tap_pos(event: InputEvent) -> Variant:
+	if event is InputEventScreenTouch and event.pressed:
+		return event.position
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		return event.position
+	return null
+
+
+func _try_switch_lane(dir: int) -> void:
+	if dir == 0:
+		return
+	var new_lane := player_lane + dir
+	if new_lane >= 0 and new_lane < LANE_COUNT:
+		player_lane = new_lane
+		play_sfx(sfx_switch)
 
 func open_discord() -> void:
 	OS.shell_open(DISCORD_URL)
@@ -345,69 +343,79 @@ func _process(delta: float) -> void:
 	queue_redraw()
 
 func _process_gameplay(delta: float) -> void:
-	score += delta * 10.0 * score_multiplier()
+	var mult := score_multiplier()
+	score += delta * 10.0 * mult
 	scroll_offset = fmod(scroll_offset + effective_scroll_speed * delta, 100000.0)
 
-	var target_x: float = lane_center(player_lane)
-	player_x = lerp(player_x, target_x, delta * LANE_MOVE_SPEED)
+	player_x = lerp(player_x, lane_center(player_lane), delta * LANE_MOVE_SPEED)
 
+	_update_spawning(delta)
+	_update_entities(delta, mult)
+	_update_trees(delta)
+
+
+func _update_spawning(delta: float) -> void:
 	spawn_timer -= delta
+	if spawn_timer > 0.0:
+		return
+	spawn_timer = spawn_interval
+	spawn_interval = max(0.45, spawn_interval - 0.01)
 
-	if spawn_timer <= 0.0:
-		spawn_timer = spawn_interval
-		spawn_interval = max(0.45, spawn_interval - 0.01)
+	var roll: float = randf()
+	var e_type := "car"
+	if roll < 0.25:
+		e_type = "coin"
+	elif roll < 0.4:
+		e_type = "cow"
 
-		var lane: int = randi() % LANE_COUNT
-		var e_type := "car"
-		var roll: float = randf()
+	entities.append({
+		"id": next_id,
+		"y": -40.0,
+		"lane": randi() % LANE_COUNT,
+		"type": e_type
+	})
+	next_id += 1
 
-		if roll < 0.25:
-			e_type = "coin"
-		elif roll < 0.4:
-			e_type = "cow"
 
-		entities.append({
-			"id": next_id,
-			"y": -40.0,
-			"lane": lane,
-			"type": e_type
-		})
-
-		next_id += 1
-
-	var to_remove_ids := []
+func _update_entities(delta: float, mult: float) -> void:
+	var move: float = effective_scroll_speed * delta
+	var hit_range: float = 18.0 * ui_scale
+	var kept: Array = []
+	kept.resize(entities.size())
+	var kept_count := 0
 
 	for e in entities:
-		e.y += effective_scroll_speed * delta
+		e.y += move
 
-		if abs(e.y - PLAYER_Y) < 18.0 * ui_scale and e.lane == player_lane:
+		if abs(e.y - PLAYER_Y) < hit_range and e.lane == player_lane:
 			if e.type == "coin":
-				score += 50.0 * score_multiplier()
+				score += 50.0 * mult
 				coins += 1
-				to_remove_ids.append(e.id)
 				play_sfx(sfx_coin)
+				continue
+			elif shield_active:
+				shield_active = false
+				play_sfx(sfx_shield)
+				continue
 			else:
-				if shield_active:
-					shield_active = false
-					to_remove_ids.append(e.id)
-					play_sfx(sfx_shield)
-				else:
-					end_run()
+				end_run()
+				return
 
-		if e.y > SCREEN_H + 40.0:
-			to_remove_ids.append(e.id)
+		if e.y <= SCREEN_H + 40.0:
+			kept[kept_count] = e
+			kept_count += 1
 
-	if to_remove_ids.size() > 0:
-		entities = entities.filter(
-			func(e: Dictionary) -> bool:
-				return not to_remove_ids.has(e.id)
-		)
+	kept.resize(kept_count)
+	entities = kept
 
+
+func _update_trees(delta: float) -> void:
+	var move: float = effective_scroll_speed * delta
+	var wrap_offset: float = trees.size() * tree_spacing
 	for t in trees:
-		t.y += effective_scroll_speed * delta
-
+		t.y += move
 		if t.y > SCREEN_H + 60.0:
-			t.y -= trees.size() * tree_spacing
+			t.y -= wrap_offset
 
 func end_run() -> void:
 	state = GameState.GAME_OVER
